@@ -36,8 +36,8 @@ namespace TrainVelocityLibrary {
     public static class NetworkedTrainFixedUpdatePatch {
         [HarmonyPrefix]
         public static void Prefix(NetworkedTrain __instance) {
-            TrainVelocityPlugin.ModLogger
-                    .LogInfo($"[TrainMod] get_fullSpeed original: {__instance.fullSpeed}, accel original: {__instance.acceleration}, decel original: {__instance.deceleration}, has cable: {__instance.hasCable}");
+            //TrainVelocityPlugin.ModLogger
+                    //.LogInfo($"[TrainMod] get_fullSpeed original: {__instance.fullSpeed}, accel original: {__instance.acceleration}, decel original: {__instance.deceleration}, has cable: {__instance.hasCable}");
 
             // If the 'train' has a cable, it's actually the chairlift system.
             if (__instance.hasCable) {
