@@ -3,6 +3,8 @@ using BepInEx.Unity.IL2CPP;
 using BepInEx.Logging;
 using HarmonyLib;
 using System;
+using UnityEngine;
+using Il2CppInterop.Runtime;
 
 // Some important learnings:
 // 1: acceleration property is different than deceleration. Default acceleration is 0.2f and default deceleration is 0.2f
@@ -17,48 +19,52 @@ namespace NoSleepWhenTalkingLibrary {
         public override void Load() {
             ModLogger = Log;
 
-            // On game load, use BepinEx to patch in the NetworkedTrainFixedUpdatePatch as defined below.
+            // On game load, use BepinEx to patch in the PlayerLipsFixedUpdatePatch as defined below.
             Harmony harmony = new Harmony("com.blake.bigwalk.NoSleepWhenTalking");
             try {
-                var fixedUpdateMethod = AccessTools.Method(typeof(NetworkedTrain), nameof(NetworkedTrain.FixedUpdate));
+                var fixedUpdateMethod = AccessTools.Method(typeof(PlayerLips), nameof(PlayerLips.Update));
                 if (fixedUpdateMethod != null) {
-                    harmony.Patch(fixedUpdateMethod, prefix: new HarmonyMethod(typeof(NetworkedTrainFixedUpdatePatch), nameof(NetworkedTrainFixedUpdatePatch.Prefix)));
+                    harmony.Patch(fixedUpdateMethod, prefix: new HarmonyMethod(typeof(PlayerLipsFixedUpdatePatch), nameof(PlayerLipsFixedUpdatePatch.Prefix)));
                     ModLogger.LogInfo("[NoSleepWhenTalkingPlugin] Successfully patched FixedUpdate!");
                 } else {
-                    ModLogger.LogError("Couldn't find FixedUpdate() method for NetworkedTrain class");
+                    ModLogger.LogError("Couldn't find FixedUpdate() method for PlayerLips class");
                 }
             } catch (Exception ex) {
-                ModLogger.LogError($"[NoSleepWhenTalkingPlugin] Patching FixedUpdate() method for NetworkedTrain failed: {ex}");
+                ModLogger.LogError($"[NoSleepWhenTalkingPlugin] Patching FixedUpdate() method for PlayerLips failed: {ex}");
             }
         }
     }
-    
 
-    public static class NetworkedTrainFixedUpdatePatch {
-        private static PlatformDisplayMap[] cachedStationMaps = null;
+    public static class PlayerLipsFixedUpdatePatch {
+        // Stores the UTC timestamp of the last logged execution
+        private static DateTime lastLogTime = DateTime.MinValue;
+        private static readonly TimeSpan checkIntervalMs = TimeSpan.FromMilliseconds(200.0);
 
         [HarmonyPrefix]
-        public static void Prefix(NetworkedTrain __instance) {
-            NoSleepWhenTalkingPlugin.ModLogger
-                    .LogInfo($"[TrainMod] get_fullSpeed original: {__instance.fullSpeed}, accel original: {__instance.acceleration}, decel original: {__instance.deceleration}, has cable: {__instance.hasCable}");
+        public static void Prefix(PlayerLips __instance) {
+            DateTime now = DateTime.UtcNow;
 
-            // If the 'train' has a cable, it's actually the chairlift system.
-            if (__instance.hasCable) {
+            if ((now - lastLogTime) < checkIntervalMs) {
                 return;
             }
 
-            if (cachedStatioasdfnMaps == null) {
-                cachedStationMaps = GameObject.FindObjectsOfType<PlatformDisplayMap>();
-            NoSleepWhenTalkingPlugin.ModLogger.LogInfo($"[TrainMod] found {cachedStationMaps.length} train maps!");
+            // Update the timestamp to current UTC time
+            lastLogTime = now;
+            bool isTalking = __instance.amplitude > 0.95f;
+            NoSleepWhenTalkingPlugin.ModLogger.LogInfo($"[NoSleepTalkingMod] isTalking: {isTalking}");
+
+            /*GameObject asdf = __instance.transform.root;
+            if (!isTalking) {
+                return;
             }
 
-            // Although it would be preferable to modify returned values of NetworkedTrain.getAcceleration() or
-            // NetworkedTrain.getFullSpeed(), Big Walk is made with Unity Il2CPP instead of Mono and that seems to interfere
-            // with things somehow.
-            __instance.acceleration = 0.4f;
-            __instance.deceleration = 0.7f;
-            __instance.fullSpeed = 6.0f;
+            PlayerSleeper sleeper = __instance.transform.root;//.gameObject.GetComponent<PlayerSleeper>();
+            if (sleeper == null) {
+                NoSleepWhenTalkingPlugin.ModLogger.LogInfo("[NoSleepTalkingMod] Couldn't find PlayerSleeper on __instance");
+                return;
+            }
+
+            NoSleepWhenTalkingPlugin.ModLogger.LogInfo("[NoSleepTalkingMod] timeTillSleep: ${sleeper.timeTilSleep}");*/
         }
     }
-
 }
