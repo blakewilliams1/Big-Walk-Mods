@@ -36,4 +36,4 @@ If you want to build the `.dll` file yourself using Windows, follow these steps:
 ```
 dotnet build
 ```
-5. This should compile the resulting .dll file under a new subfolder called `obj/`, ready for use. Move it into your BepinEx folders inside the Big Walk game folder.
+5. This should compile the resulting `TrainVelocityPlugin.dll` file under a new subfolder called `bin/Debug/net10.0`, ready for use. Move it into your BepinEx folders inside the Big Walk game folder.
