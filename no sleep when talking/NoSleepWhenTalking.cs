@@ -1,70 +1,115 @@
-﻿using BepInEx;
-using BepInEx.Unity.IL2CPP;
+﻿using System;
+using System.Collections.Generic;
+using BepInEx;
 using BepInEx.Logging;
+using BepInEx.Unity.IL2CPP;
 using HarmonyLib;
-using System;
-using UnityEngine;
-using Il2CppInterop.Runtime;
 
-// Some important learnings:
-// 1: acceleration property is different than deceleration. Default acceleration is 0.2f and default deceleration is 0.2f
-// 2: fullSpeed variable is the maximum speed the train should go to. Default value is 3.0f
-// 3: targetSpeed seems to be the current speed and setting it to a fixed value prevents the train from braking/stopping.
-// 4: The chairlift is treated as a train because in practice it's the same thing: A vehicle to hold players and be led along a pre-determined route.
 namespace NoSleepWhenTalkingLibrary {
     [BepInPlugin("com.blake.bigwalk.nosleepwhentalking", "No Sleep When Talking Mod", "1.0.0")]
     public class NoSleepWhenTalkingPlugin : BasePlugin {
         public static ManualLogSource ModLogger;
 
+        // Loads all and applies the parts of this mod from below.
         public override void Load() {
             ModLogger = Log;
-
-            // On game load, use BepinEx to patch in the PlayerLipsFixedUpdatePatch as defined below.
+            ModLogger.LogInfo($"Plugin NoSleepWhenTalking mod is loaded!");
             Harmony harmony = new Harmony("com.blake.bigwalk.NoSleepWhenTalking");
-            try {
-                var fixedUpdateMethod = AccessTools.Method(typeof(PlayerLips), nameof(PlayerLips.Update));
-                if (fixedUpdateMethod != null) {
-                    harmony.Patch(fixedUpdateMethod, prefix: new HarmonyMethod(typeof(PlayerLipsFixedUpdatePatch), nameof(PlayerLipsFixedUpdatePatch.Prefix)));
-                    ModLogger.LogInfo("[NoSleepWhenTalkingPlugin] Successfully patched FixedUpdate!");
-                } else {
-                    ModLogger.LogError("Couldn't find FixedUpdate() method for PlayerLips class");
-                }
-            } catch (Exception ex) {
-                ModLogger.LogError($"[NoSleepWhenTalkingPlugin] Patching FixedUpdate() method for PlayerLips failed: {ex}");
-            }
+            harmony.PatchAll();
         }
     }
 
-    public static class PlayerLipsFixedUpdatePatch {
-        // Stores the UTC timestamp of the last logged execution
-        private static DateTime lastLogTime = DateTime.MinValue;
-        private static readonly TimeSpan checkIntervalMs = TimeSpan.FromMilliseconds(200.0);
-
-        [HarmonyPrefix]
-        public static void Prefix(PlayerLips __instance) {
+    // This is a helper class to deduplicate code dealing with throttling how often these talking checkers are actually ran.
+    public static class Throttle {
+        public static bool Ready(ref DateTime lastExecution, double intervalMs = 200) {
             DateTime now = DateTime.UtcNow;
+            if ((now - lastExecution).TotalMilliseconds < intervalMs) return false;
+            lastExecution = now;
+            return true;
+        }
+    }
+    
+    // Container class to be a value of PlayerRegistry map.
+    public class PlayerData {
+        public PlayerCharacter character { get; set; }
+        public PlayerLips lips { get; set; }
+        public PlayerSleeper sleeper { get; set; }
+    }
 
-            if ((now - lastLogTime) < checkIntervalMs) {
+    // A static structure to globally hold a mapping of PlayerCharacter to associated PlayerLips and PlayerSleeper instances.
+    public static class PlayerRegistry {
+        // Map keyed by PlayerCharacter Instance ID to really ensure no issues with object equality comparison operations.
+        private static readonly Dictionary<int, PlayerData> players = new Dictionary<int, PlayerData>();
+
+        public static PlayerData GetOrCreate(PlayerCharacter _character) {
+            int key = _character.GetInstanceID();
+            if (!players.TryGetValue(key, out var data)) {
+                data = new PlayerData { character = _character };
+                players[key] = data;
+            }
+            return data;
+        }
+
+        public static IEnumerable<PlayerData> GetAllPlayers() {
+            return players.Values;
+        }
+    }
+
+    [HarmonyPatch(typeof(PlayerSleeper), nameof(PlayerSleeper.Update))]
+    public static class PlayerSleeperUpdatePatch {
+        private static DateTime lastRunTime = DateTime.MinValue;
+
+        [HarmonyPostfix]
+        public static void Postfix(PlayerSleeper __instance) {
+            if (!Throttle.Ready(ref lastRunTime)) {
                 return;
             }
 
-            // Update the timestamp to current UTC time
-            lastLogTime = now;
-            bool isTalking = __instance.amplitude > 0.95f;
-            NoSleepWhenTalkingPlugin.ModLogger.LogInfo($"[NoSleepTalkingMod] isTalking: {isTalking}");
-
-            /*GameObject asdf = __instance.transform.root;
-            if (!isTalking) {
+            if (__instance.playerCharacter == null) {
                 return;
             }
 
-            PlayerSleeper sleeper = __instance.transform.root;//.gameObject.GetComponent<PlayerSleeper>();
-            if (sleeper == null) {
-                NoSleepWhenTalkingPlugin.ModLogger.LogInfo("[NoSleepTalkingMod] Couldn't find PlayerSleeper on __instance");
+            PlayerData data = PlayerRegistry.GetOrCreate(__instance.playerCharacter);
+            if (data.sleeper == __instance) {
                 return;
             }
 
-            NoSleepWhenTalkingPlugin.ModLogger.LogInfo("[NoSleepTalkingMod] timeTillSleep: ${sleeper.timeTilSleep}");*/
+            data.sleeper = __instance;
+            NoSleepWhenTalkingPlugin.ModLogger.LogDebug(
+                $"[NoSleepMod] Dynamically registered PlayerSleeper to '{__instance.playerCharacter.name}'");
+        }
+    }
+
+    // This is where the important stuff happens. Assuming the map of player lips and sleepers to characters are all in place,
+    // this is where the sleep timeout resets when it detects you talking.
+    [HarmonyPatch(typeof(PlayerLips), nameof(PlayerLips.Update))]
+    public static class PlayerLipsUpdatePatch {
+        private static DateTime lastRunTime = DateTime.MinValue;
+
+        [HarmonyPostfix]
+        public static void Postfix(PlayerLips __instance) {
+            if (!Throttle.Ready(ref lastRunTime)) {
+                return;
+            }
+
+            if (__instance == null || __instance.playerCharacter == null) {
+                return;
+            }
+
+            PlayerData data = PlayerRegistry.GetOrCreate(__instance.playerCharacter);
+            if (data.lips != __instance) {
+                data.lips = __instance;
+                NoSleepWhenTalkingPlugin.ModLogger.LogDebug(
+                    $"[NoSleepMod] Dynamically registered PlayerLips to '{__instance.playerCharacter.name}'");
+            }
+
+            // Check if this player's voice volume exceeds the talking threshold.
+            if (__instance.amplitude < 0.95f) {
+                return;
+            }
+
+            // The player is talking; find the corresponding PlayerSleeper and let it know a wakeful action is happening.
+            data.sleeper.RecordAction();
         }
     }
 }
